@@ -10,10 +10,8 @@ st.set_page_config(page_title="학교 급식 찾아보기", page_icon="🍱", la
 
 st.title("🍱 학교 급식 찾아보기")
 
-# 탭 구성 (1. 오늘의 급식 메뉴 / 2. 급식 원산지 비율 분석)
 tab1, tab2 = st.tabs(["📋 오늘의 급식 메뉴", "📊 식재료 원산지 비율"])
 
-# 1. 축약어 대체 사전 및 정규화 함수
 ABBR_MAP = {
     "여고": "여자고등학교",
     "여중": "여자중학교",
@@ -27,7 +25,6 @@ ABBR_MAP = {
 
 
 def expand_school_name(name: str) -> str:
-    """축약어가 포함된 학교 이름을 정식 명칭 형태(예: 수도여고 -> 수도여자고등학교)로 확장합니다."""
     expanded = name
     for abbr, full in ABBR_MAP.items():
         if abbr in expanded:
@@ -36,10 +33,8 @@ def expand_school_name(name: str) -> str:
     return expanded
 
 
-# 2. NEIS API 요청 함수들
 @st.cache_data(ttl=3600)
 def fetch_school_info(school_name: str):
-    """NEIS 학교기본정보 API를 호출하여 학교 목록을 검색합니다."""
     url = "https://open.neis.go.kr/hub/schoolInfo"
     params = {"Type": "json", "pIndex": 1, "pSize": 100, "SCHUL_NM": school_name}
     try:
@@ -53,7 +48,6 @@ def fetch_school_info(school_name: str):
 
 
 def search_school(keyword: str):
-    """입력된 검색어로 학교를 검색하고, 결과가 없는 경우 축약어를 풀어 재검색합니다."""
     results = fetch_school_info(keyword)
     if not results:
         expanded_keyword = expand_school_name(keyword)
@@ -64,14 +58,13 @@ def search_school(keyword: str):
 
 @st.cache_data(ttl=3600)
 def fetch_meal_info(atpt_code: str, sd_code: str, ymd_str: str):
-    """NEIS 급식식단정보 API를 호출하여 해당 날짜의 중식 정보를 가져옵니다."""
     url = "https://open.neis.go.kr/hub/mealServiceDietInfo"
     params = {
         "Type": "json",
         "ATPT_OFCDC_SC_CODE": atpt_code,
         "SD_SCHUL_CODE": sd_code,
         "MLSV_YMD": ymd_str,
-        "MMEAL_SC_CODE": "2",  # 2: 중식
+        "MMEAL_SC_CODE": "2",
     }
     try:
         res = requests.get(url, params=params, timeout=5)
@@ -83,32 +76,54 @@ def fetch_meal_info(atpt_code: str, sd_code: str, ymd_str: str):
     return None
 
 
-def parse_origin_info(orgn_str: str):
-    """NEIS ORGN_INFO 텍스트를 파싱하여 국산/수입산 항목 및 비율을 추출합니다."""
-    if not orgn_str:
+def parse_origin_info(meal_data: dict):
+    """
+    ORGN_INFO 필드 분석 및 DDISH_NM(메뉴명) 내 원산지 표기를 함께 추려냅니다.
+    """
+    orgn_str = meal_data.get("ORGN_INFO", "") if meal_data else ""
+    dish_str = meal_data.get("DDISH_NM", "") if meal_data else ""
+
+    raw_items = []
+
+    # 1. ORGN_INFO 전처리 및 분할
+    if orgn_str:
+        cleaned_orgn = orgn_str.replace("<br/>", "\n").replace("<br>", "\n")
+        lines = [line.strip() for line in cleaned_orgn.split("\n") if line.strip()]
+        raw_items.extend(lines)
+
+    # 2. ORGN_INFO가 빈 경우 DDISH_NM(메뉴명) 내 [원산지] 또는 (원산지) 패턴 추출
+    if not raw_items and dish_str:
+        # 예: 쇠고기무국 [쇠고기:국내산]
+        found_in_dish = re.findall(r"\[(.*?)\]|\((.*?)\)", dish_str)
+        for group in found_in_dish:
+            match = group[0] or group[1]
+            if ":" in match or "국산" in match or "산" in match:
+                raw_items.append(match)
+
+    if not raw_items:
         return [], {"국산": 0, "수입산": 0, "기타/혼합": 0}, {}
 
-    items = orgn_str.split("<br/>")
     parsed_list = []
-
     counts = {"국산": 0, "수입산": 0, "기타/혼합": 0}
 
-    for item in items:
-        item_clean = item.strip()
-        if not item_clean:
-            continue
+    for item in raw_items:
+        # 다양한 구분 기호 대응 (:, -, ( ))
+        if ":" in item:
+            parts = item.split(":", 1)
+            ingredient, origin = parts[0].strip(), parts[1].strip()
+        elif "-" in item:
+            parts = item.split("-", 1)
+            ingredient, origin = parts[0].strip(), parts[1].strip()
+        else:
+            ingredient = "식재료"
+            origin = item.strip()
 
-        # 예: "쇠고기 : 국내산" 또는 "두부 : 콩(호주산)"
-        parts = item_clean.split(":")
-        ingredient = parts[0].strip()
-        origin = parts[1].strip() if len(parts) > 1 else "미표기"
-
-        # 국산/수입산 판별
-        if "국내산" in origin or "국산" in origin or "한우" in origin:
+        # 국산/수입산 판별 로직
+        if any(kw in origin for kw in ["국내산", "국산", "한우"]):
             category = "국산"
         elif any(
-            country in origin
-            for country in [
+            kw in origin
+            for kw in [
                 "수입산",
                 "호주",
                 "미국",
@@ -118,6 +133,7 @@ def parse_origin_info(orgn_str: str):
                 "스페인",
                 "베트남",
                 "원양산",
+                "러시아",
             ]
         ):
             category = "수입산"
@@ -125,9 +141,7 @@ def parse_origin_info(orgn_str: str):
             category = "기타/혼합"
 
         counts[category] += 1
-        parsed_list.append(
-            {"식재료": ingredient, "원산지": origin, "구분": category}
-        )
+        parsed_list.append({"식재료": ingredient, "원산지": origin, "구분": category})
 
     total = sum(counts.values())
     ratios = {
@@ -137,7 +151,6 @@ def parse_origin_info(orgn_str: str):
     return parsed_list, counts, ratios
 
 
-# 공통 학교 및 날짜 선택 폼 UI 함수
 def render_search_form(key_prefix: str):
     st.subheader("1. 학교 검색")
     search_input = st.text_input(
@@ -161,9 +174,7 @@ def render_search_form(key_prefix: str):
             )
             selected_school = options[selected_label]
         else:
-            st.warning(
-                "⚠️ 입력하신 학교를 찾을 수 없습니다. 정확한 학교명을 입력해주세요."
-            )
+            st.warning("⚠️ 입력하신 학교를 찾을 수 없습니다.")
 
     st.divider()
     st.subheader("2. 날짜 선택")
@@ -175,9 +186,7 @@ def render_search_form(key_prefix: str):
     return selected_school, selected_date
 
 
-# ==========================================
 # TAB 1: 오늘의 급식 메뉴
-# ==========================================
 with tab1:
     school, date_val = render_search_form("tab1")
 
@@ -192,7 +201,7 @@ with tab1:
 
         if meal_data:
             raw_dish = meal_data.get("DDISH_NM", "")
-            clean_dish = raw_dish.replace("<br/>", "\n")
+            clean_dish = raw_dish.replace("<br/>", "\n").replace("<br>", "\n")
             cal_info = meal_data.get("CAL_INFO", "정보 없음")
 
             col1, col2 = st.columns([2, 1])
@@ -206,9 +215,7 @@ with tab1:
             st.info("ℹ️ 선택하신 날짜에 제공되는 중식 급식 정보가 없습니다.")
 
 
-# ==========================================
 # TAB 2: 식재료 원산지 비율 분석
-# ==========================================
 with tab2:
     school, date_val = render_search_form("tab2")
 
@@ -222,11 +229,9 @@ with tab2:
         st.caption(f"일자: {date_val.strftime('%Y년 %m월 %d일')}")
 
         if meal_data:
-            orgn_info_str = meal_data.get("ORGN_INFO", "")
-            parsed_items, counts, ratios = parse_origin_info(orgn_info_str)
+            parsed_items, counts, ratios = parse_origin_info(meal_data)
 
             if parsed_items:
-                # 1. 비율 요약 메트릭 표시
                 m1, m2, m3 = st.columns(3)
                 m1.metric("🇰🇷 국산 비율", f"{ratios['국산']}%", f"{counts['국산']}개 품목")
                 m2.metric(
@@ -242,11 +247,12 @@ with tab2:
 
                 st.divider()
 
-                # 2. 원산지 상세 목록 표
                 st.markdown("**📋 전체 식재료 원산지 상세 표**")
                 df = pd.DataFrame(parsed_items)
                 st.dataframe(df, use_container_width=True, hide_index=True)
             else:
-                st.info("ℹ️ 해당 날짜에 등록된 식재료 원산지 상세 정보가 없습니다.")
+                st.info(
+                    "ℹ️ 해당 날짜의 식단 정보는 있으나 원산지 상세 필드가 등록되어 있지 않습니다."
+                )
         else:
             st.info("ℹ️ 선택하신 날짜에 제공되는 중식 급식 정보가 없습니다.")
