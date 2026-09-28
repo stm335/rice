@@ -15,31 +15,7 @@ st.title("🍱 학교 급식 찾아보기")
 # 2개 탭 구성
 tab1, tab2 = st.tabs(["📋 개별 학교 급식 조회", "📊 평택시 고등학교 전체 칼로리 비교"])
 
-# 축약어 대체 사전 및 정규화 함수
-ABBR_MAP = {
-    "여고": "여자고등학교",
-    "여중": "여자중학교",
-    "여초": "여자초등학교",
-    "남고": "남자고등학교",
-    "남중": "남자중학교",
-import datetime
-import re
-import pandas as pd
-import requests
-import streamlit as st
-from zoneinfo import ZoneInfo
-
-# 페이지 설정
-st.set_page_config(
-    page_title="학교 급식 찾아보기", page_icon="🍱", layout="wide"
-)
-
-st.title("🍱 학교 급식 찾아보기")
-
-# 2개 탭 구성
-tab1, tab2 = st.tabs(["📋 개별 학교 급식 조회", "📊 평택시 고등학교 전체 칼로리 비교"])
-
-# 축약어 대체 사전 및 정규화 함수
+# 축약어 대체 사전
 ABBR_MAP = {
     "여고": "여자고등학교",
     "여중": "여자중학교",
@@ -62,11 +38,7 @@ def expand_school_name(name: str) -> str:
     return expanded
 
 
-# ----------------------------------------------------
-# NEIS API 함수 정의 (호출 코드보다 항상 위에 위치해야 함)
-# ----------------------------------------------------
-
-
+# 1. 개별 학교 검색 API
 @st.cache_data(ttl=3600)
 def fetch_school_info(school_name: str):
     """NEIS 학교기본정보 API를 호출하여 학교 목록을 검색합니다."""
@@ -92,6 +64,7 @@ def search_school(keyword: str):
     return results
 
 
+# 2. 평택시 소재 고등학교 동적 조회 API
 @st.cache_data(ttl=86400)
 def fetch_pyeongtaek_high_schools():
     """경기도교육청(J10) 중 위치(LCTN_SC_NM)가 '경기도 평택시'인 고등학교만 조회합니다."""
@@ -114,6 +87,7 @@ def fetch_pyeongtaek_high_schools():
     return []
 
 
+# 3. 급식 정보 API
 @st.cache_data(ttl=3600)
 def fetch_meal_info(atpt_code: str, sd_code: str, ymd_str: str):
     """NEIS 급식식단정보 API를 호출하여 해당 날짜의 중식 정보를 가져옵니다."""
@@ -226,7 +200,7 @@ with tab2:
         ymd_tab2 = selected_date_tab2.strftime("%Y%m%d")
 
         # 평택시 고등학교 목록 가져오기
-        pyeongtaek_schools = fetch_pyeongtaek_schools()
+        pyeongtaek_schools = fetch_pyeongtaek_high_schools()
 
         if pyeongtaek_schools:
             st.success(
