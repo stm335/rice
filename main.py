@@ -22,6 +22,30 @@ ABBR_MAP = {
     "여초": "여자초등학교",
     "남고": "남자고등학교",
     "남중": "남자중학교",
+import datetime
+import re
+import pandas as pd
+import requests
+import streamlit as st
+from zoneinfo import ZoneInfo
+
+# 페이지 설정
+st.set_page_config(
+    page_title="학교 급식 찾아보기", page_icon="🍱", layout="wide"
+)
+
+st.title("🍱 학교 급식 찾아보기")
+
+# 2개 탭 구성
+tab1, tab2 = st.tabs(["📋 개별 학교 급식 조회", "📊 평택시 고등학교 전체 칼로리 비교"])
+
+# 축약어 대체 사전 및 정규화 함수
+ABBR_MAP = {
+    "여고": "여자고등학교",
+    "여중": "여자중학교",
+    "여초": "여자초등학교",
+    "남고": "남자고등학교",
+    "남중": "남자중학교",
     "고": "고등학교",
     "중": "중학교",
     "초": "초등학교",
