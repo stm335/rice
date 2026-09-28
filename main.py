@@ -38,12 +38,10 @@ def expand_school_name(name: str) -> str:
 
 # NEIS API 요청 함수
 @st.cache_data(ttl=3600)
-def fetch_school_info(school_name: str, location: str = None):
+def fetch_school_info(school_name: str):
     """NEIS 학교기본정보 API를 호출하여 학교 목록을 검색합니다."""
     url = "https://open.neis.go.kr/hub/schoolInfo"
     params = {"Type": "json", "pIndex": 1, "pSize": 100, "SCHUL_NM": school_name}
-    if location:
-        params["LCTN_SC_NM"] = location  # 예: 경기도평택시
 
     try:
         res = requests.get(url, params=params, timeout=5)
@@ -87,32 +85,46 @@ def fetch_meal_info(atpt_code: str, sd_code: str, ymd_str: str):
 
 
 @st.cache_data(ttl=3600)
-def fetch_pyeongtaek_schools(school_type_keyword: str):
-    """평택 소재 학교 목록 중 선택된 학교급(고/중/초)에 맞게 검색합니다."""
-    # 경기도교육청(J10) 관할 평택 소재 학교 검색
+def fetch_pyeongtaek_schools(school_kind: str):
+    """경기도교육청(J10) 관할 평택 소재 학교 목록을 가져옵니다."""
     url = "https://open.neis.go.kr/hub/schoolInfo"
     params = {
         "Type": "json",
         "pIndex": 1,
-        "pSize": 100,
-        "ATPT_OFCDC_SC_CODE": "J10",
-        "SCHUL_NM": school_type_keyword,
+        "pSize": 1000,
+        "ATPT_OFCDC_SC_CODE": "J10",  # 경기도교육청
+        "LCTN_SC_NM": "경기도 평택시",  # 경기도 평택시 소재
     }
     try:
         res = requests.get(url, params=params, timeout=5)
         data = res.json()
         if "schoolInfo" in data:
             rows = data["schoolInfo"][1]["row"]
-            # 도로명 주소 또는 소재지명에 '평택'이 포함된 학교만 필터링
-            pyeongtaek_rows = [
-                r
-                for r in rows
-                if "평택" in r.get("ORG_RDNMA", "")
-                or "평택" in r.get("LCTN_SC_NM", "")
+            # 선택한 학교급(고등학교, 중학교, 초등학교)에 따라 필터링
+            filtered = [
+                r for r in rows if r.get("SCHUL_KND_SC_NM") == school_kind
             ]
-            return pyeongtaek_rows
+            return filtered
     except Exception:
         pass
+
+    # LCTN_SC_NM 파라미터 응답이 없을 경우 주소 필드로 2차 검색
+    try:
+        params_fallback = {
+            "Type": "json",
+            "pIndex": 1,
+            "pSize": 500,
+            "ATPT_OFCDC_SC_CODE": "J10",
+            "SCHUL_NM": "평택",
+        }
+        res = requests.get(url, params=params_fallback, timeout=5)
+        data = res.json()
+        if "schoolInfo" in data:
+            rows = data["schoolInfo"][1]["row"]
+            return [r for r in rows if r.get("SCHUL_KND_SC_NM") == school_kind]
+    except Exception:
+        pass
+
     return []
 
 
@@ -221,9 +233,7 @@ with tab2:
     if selected_date_tab2 and school_kind:
         ymd_tab2 = selected_date_tab2.strftime("%Y%m%d")
 
-        # 검색 키워드 설정 (고등학교 -> 고)
-        search_kw = school_kind[0] if school_kind != "초등학교" else "초"
-        pyeongtaek_schools = fetch_pyeongtaek_schools(search_kw)
+        pyeongtaek_schools = fetch_pyeongtaek_schools(school_kind)
 
         if pyeongtaek_schools:
             with st.spinner("평택시 내 학교들의 급식 칼로리 정보를 불러오는 중..."):
@@ -294,4 +304,4 @@ with tab2:
                     f"ℹ️ {selected_date_tab2.strftime('%Y년 %m월 %d일')}에 급식 칼로리 정보가 등록된 평택시 {school_kind}가 없습니다. (주말/휴일 또는 미등록)"
                 )
         else:
-            st.warning("평택시 학교 정보를 불러올 수 없습니다.")
+            st.warning("평택시 학교 정보를 불러올 수 없습니다. 다시 시도해주세요.")
