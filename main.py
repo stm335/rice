@@ -6,9 +6,9 @@ import streamlit as st
 from zoneinfo import ZoneInfo
 
 
-# ==========================================
+# =========================================================
 # 페이지 설정
-# ==========================================
+# =========================================================
 
 st.set_page_config(
     page_title="학교 급식 찾아보기",
@@ -19,9 +19,9 @@ st.set_page_config(
 st.title("🍱 학교 급식 찾아보기")
 
 
-# ==========================================
-# 탭 구성
-# ==========================================
+# =========================================================
+# 탭
+# =========================================================
 
 tab1, tab2 = st.tabs([
     "📋 개별 학교 급식 조회",
@@ -29,9 +29,16 @@ tab1, tab2 = st.tabs([
 ])
 
 
-# ==========================================
-# 축약어 대체 사전
-# ==========================================
+# =========================================================
+# 공통 설정
+# =========================================================
+
+NEIS_BASE_URL = "https://open.neis.go.kr/hub"
+
+
+# =========================================================
+# 축약어
+# =========================================================
 
 ABBR_MAP = {
     "여고": "여자고등학교",
@@ -46,7 +53,7 @@ ABBR_MAP = {
 
 
 def expand_school_name(name: str) -> str:
-    """축약어가 포함된 학교 이름을 정식 명칭 형태로 확장합니다."""
+    """학교 이름의 축약어를 정식 명칭으로 변경"""
 
     expanded = name
 
@@ -58,15 +65,14 @@ def expand_school_name(name: str) -> str:
     return expanded
 
 
-# ==========================================
-# 1. 개별 학교 검색 API
-# ==========================================
+# =========================================================
+# 1. 학교 검색
+# =========================================================
 
 @st.cache_data(ttl=3600)
 def fetch_school_info(school_name: str):
-    """NEIS 학교기본정보 API를 호출하여 학교 목록을 검색합니다."""
 
-    url = "https://open.neis.go.kr/hub/schoolInfo"
+    url = f"{NEIS_BASE_URL}/schoolInfo"
 
     params = {
         "Type": "json",
@@ -76,56 +82,76 @@ def fetch_school_info(school_name: str):
     }
 
     try:
-        res = requests.get(
+
+        response = requests.get(
             url,
             params=params,
-            timeout=10
+            timeout=15
         )
 
-        res.raise_for_status()
+        response.raise_for_status()
 
-        data = res.json()
+        data = response.json()
 
-        if "schoolInfo" in data and len(data["schoolInfo"]) > 1:
-            return data["schoolInfo"][1].get("row", [])
+        # NEIS 오류 응답
+        if "RESULT" in data:
 
-    except requests.exceptions.RequestException as e:
-        print(f"학교 검색 API 오류: {e}")
+            result = data["RESULT"]
+
+            print(
+                "NEIS 오류:",
+                result.get("CODE"),
+                result.get("MESSAGE")
+            )
+
+            return []
+
+        if "schoolInfo" not in data:
+            return []
+
+        if len(data["schoolInfo"]) < 2:
+            return []
+
+        return data["schoolInfo"][1].get(
+            "row",
+            []
+        )
 
     except Exception as e:
-        print(f"학교 검색 처리 오류: {e}")
 
-    return []
+        print(
+            f"학교 검색 오류: {e}"
+        )
+
+        return []
 
 
 def search_school(keyword: str):
-    """
-    입력된 검색어로 학교를 검색하고,
-    결과가 없으면 축약어를 풀어서 다시 검색합니다.
-    """
 
     results = fetch_school_info(keyword)
 
+    # 검색 결과가 없으면 축약어를 풀어서 다시 검색
     if not results:
-        expanded_keyword = expand_school_name(keyword)
 
-        if expanded_keyword != keyword:
-            results = fetch_school_info(expanded_keyword)
+        expanded = expand_school_name(keyword)
+
+        if expanded != keyword:
+
+            results = fetch_school_info(
+                expanded
+            )
 
     return results
 
 
-# ==========================================
-# 2. 평택시 고등학교 목록 조회
-# ==========================================
+# =========================================================
+# 2. 경기도 고등학교 목록 가져오기
+# =========================================================
 
 @st.cache_data(ttl=86400)
-def fetch_pyeongtaek_high_schools():
-    """
-    경기도 평택시에 소재한 고등학교 목록을 가져옵니다.
-    """
+def fetch_gyeonggi_high_schools():
 
-    url = "https://open.neis.go.kr/hub/schoolInfo"
+    url = f"{NEIS_BASE_URL}/schoolInfo"
 
     params = {
         "Type": "json",
@@ -135,42 +161,130 @@ def fetch_pyeongtaek_high_schools():
         # 경기도교육청
         "ATPT_OFCDC_SC_CODE": "J10",
 
-        # 평택시
-        "LCTN_SC_NM": "경기도 평택시",
-
         # 고등학교
         "SCHUL_KND_SC_NM": "고등학교",
     }
 
     try:
-        res = requests.get(
+
+        response = requests.get(
             url,
             params=params,
-            timeout=10
+            timeout=20
         )
 
-        res.raise_for_status()
+        response.raise_for_status()
 
-        data = res.json()
+        data = response.json()
 
-        if "schoolInfo" in data and len(data["schoolInfo"]) > 1:
+        # API 오류 확인
+        if "RESULT" in data:
 
-            rows = data["schoolInfo"][1].get("row", [])
+            result = data["RESULT"]
 
-            return rows
+            st.error(
+                f"NEIS API 오류: "
+                f"{result.get('CODE', '')} / "
+                f"{result.get('MESSAGE', '')}"
+            )
+
+            return []
+
+        if "schoolInfo" not in data:
+
+            st.error(
+                "NEIS API에서 학교 정보를 "
+                "받지 못했습니다."
+            )
+
+            return []
+
+        if len(data["schoolInfo"]) < 2:
+
+            st.error(
+                "NEIS API 응답 구조가 "
+                "예상과 다릅니다."
+            )
+
+            return []
+
+        rows = data["schoolInfo"][1].get(
+            "row",
+            []
+        )
+
+        return rows
+
+    except requests.exceptions.Timeout:
+
+        st.error(
+            "NEIS API 응답 시간이 초과되었습니다."
+        )
+
+        return []
 
     except requests.exceptions.RequestException as e:
-        st.error(f"학교 목록 API 연결 오류: {e}")
+
+        st.error(
+            f"NEIS API 연결 오류: {e}"
+        )
+
+        return []
 
     except Exception as e:
-        st.error(f"학교 목록 처리 오류: {e}")
 
-    return []
+        st.error(
+            f"학교 목록 처리 오류: {e}"
+        )
+
+        return []
 
 
-# ==========================================
-# 3. 급식 정보 API
-# ==========================================
+# =========================================================
+# 3. 평택시 고등학교 필터링
+# =========================================================
+
+def get_pyeongtaek_high_schools():
+
+    schools = fetch_gyeonggi_high_schools()
+
+    if not schools:
+        return []
+
+    pyeongtaek_schools = []
+
+    for school in schools:
+
+        location = str(
+            school.get(
+                "LCTN_SC_NM",
+                ""
+            )
+        )
+
+        address = str(
+            school.get(
+                "ORG_RDNMA",
+                ""
+            )
+        )
+
+        # 소재지 또는 주소에 "평택"이 포함되어 있으면 선택
+        if (
+            "평택" in location
+            or "평택" in address
+        ):
+
+            pyeongtaek_schools.append(
+                school
+            )
+
+    return pyeongtaek_schools
+
+
+# =========================================================
+# 4. 급식 정보
+# =========================================================
 
 @st.cache_data(ttl=3600)
 def fetch_meal_info(
@@ -178,11 +292,8 @@ def fetch_meal_info(
     sd_code: str,
     ymd_str: str
 ):
-    """
-    특정 학교의 특정 날짜 중식 정보를 가져옵니다.
-    """
 
-    url = "https://open.neis.go.kr/hub/mealServiceDietInfo"
+    url = f"{NEIS_BASE_URL}/mealServiceDietInfo"
 
     params = {
         "Type": "json",
@@ -196,77 +307,107 @@ def fetch_meal_info(
 
     try:
 
-        res = requests.get(
+        response = requests.get(
             url,
             params=params,
-            timeout=10
+            timeout=15
         )
 
-        res.raise_for_status()
+        response.raise_for_status()
 
-        data = res.json()
+        data = response.json()
 
-        if "mealServiceDietInfo" in data:
+        # API 오류
+        if "RESULT" in data:
+            return None
 
-            rows = data["mealServiceDietInfo"][1].get(
-                "row",
-                []
-            )
+        if "mealServiceDietInfo" not in data:
+            return None
 
-            if rows:
-                return rows[0]
+        if len(data["mealServiceDietInfo"]) < 2:
+            return None
 
-    except requests.exceptions.RequestException as e:
-        print(f"급식 API 오류: {e}")
+        rows = data[
+            "mealServiceDietInfo"
+        ][1].get(
+            "row",
+            []
+        )
+
+        if not rows:
+            return None
+
+        return rows[0]
 
     except Exception as e:
-        print(f"급식 데이터 처리 오류: {e}")
 
-    return None
+        print(
+            f"급식 API 오류: {e}"
+        )
+
+        return None
 
 
-# ==========================================
-# 4. 칼로리 추출
-# ==========================================
+# =========================================================
+# 5. 칼로리 추출
+# =========================================================
 
-def extract_calories(cal_str: str) -> float:
-    """
-    '654.3 Kcal' 같은 문자열에서 숫자만 추출합니다.
-    """
+def extract_calories(cal_str):
 
     if not cal_str:
         return 0.0
 
+    # 숫자 + 소수점 찾기
     match = re.search(
         r"([\d.]+)",
         str(cal_str)
     )
 
-    if match:
-        try:
-            return float(match.group(1))
-        except ValueError:
-            return 0.0
+    if not match:
+        return 0.0
 
-    return 0.0
+    try:
+
+        return float(
+            match.group(1)
+        )
+
+    except ValueError:
+
+        return 0.0
 
 
-# ==========================================
+# =========================================================
+# 6. 날짜
+# =========================================================
+
+today_kst = datetime.datetime.now(
+    ZoneInfo("Asia/Seoul")
+).date()
+
+
+# =========================================================
 # TAB 1
-# 개별 학교 급식 조회
-# ==========================================
+# =========================================================
 
 with tab1:
 
-    st.subheader("1. 학교 검색")
+    st.subheader("🔎 1. 학교 검색")
 
     search_input = st.text_input(
         "학교 이름을 입력하세요",
-        placeholder="예: 수도여고, 서울고, 환일중, 평택고",
-        key="tab1_search",
+        placeholder=(
+            "예: 평택고, 수도여고, "
+            "서울고, 환일중"
+        ),
+        key="tab1_search"
     )
 
     selected_school = None
+
+    # -----------------------------------------------------
+    # 학교 검색
+    # -----------------------------------------------------
 
     if search_input.strip():
 
@@ -276,20 +417,36 @@ with tab1:
 
         if schools:
 
-            # 학교 이름 + 소재지 표시
-            options = {
-                f"{sch['SCHUL_NM']} "
-                f"({sch.get('LCTN_SC_NM', '')})": sch
-                for sch in schools
-            }
+            options = {}
+
+            for school in schools:
+
+                school_name = school.get(
+                    "SCHUL_NM",
+                    "학교명 없음"
+                )
+
+                location = school.get(
+                    "LCTN_SC_NM",
+                    ""
+                )
+
+                label = (
+                    f"{school_name} "
+                    f"({location})"
+                )
+
+                options[label] = school
 
             selected_label = st.selectbox(
-                "검색된 학교 목록에서 선택하세요:",
+                "검색된 학교 목록에서 선택하세요",
                 list(options.keys()),
-                key="tab1_select",
+                key="tab1_select"
             )
 
-            selected_school = options[selected_label]
+            selected_school = options[
+                selected_label
+            ]
 
         else:
 
@@ -299,11 +456,11 @@ with tab1:
 
     st.divider()
 
-    st.subheader("2. 날짜 선택")
+    # -----------------------------------------------------
+    # 날짜
+    # -----------------------------------------------------
 
-    today_kst = datetime.datetime.now(
-        ZoneInfo("Asia/Seoul")
-    ).date()
+    st.subheader("📅 2. 날짜 선택")
 
     selected_date_tab1 = st.date_input(
         "날짜를 선택하세요",
@@ -311,29 +468,44 @@ with tab1:
         key="tab1_date"
     )
 
-    # ======================================
+    # -----------------------------------------------------
     # 급식 조회
-    # ======================================
+    # -----------------------------------------------------
 
-    if selected_school and selected_date_tab1:
+    if selected_school:
 
         ymd = selected_date_tab1.strftime(
             "%Y%m%d"
         )
 
-        meal_data = fetch_meal_info(
-            selected_school["ATPT_OFCDC_SC_CODE"],
-            selected_school["SD_SCHUL_CODE"],
-            ymd
+        with st.spinner(
+            "급식 정보를 불러오는 중..."
+        ):
+
+            meal_data = fetch_meal_info(
+                selected_school[
+                    "ATPT_OFCDC_SC_CODE"
+                ],
+                selected_school[
+                    "SD_SCHUL_CODE"
+                ],
+                ymd
+            )
+
+        school_name = selected_school.get(
+            "SCHUL_NM",
+            "학교"
         )
 
         st.markdown(
-            f"### 🍱 **{selected_school['SCHUL_NM']}** 급식 정보"
+            f"### 🍱 **{school_name}** 급식 정보"
         )
 
         st.caption(
-            f"일자: "
-            f"{selected_date_tab1.strftime('%Y년 %m월 %d일')}"
+            "일자: "
+            + selected_date_tab1.strftime(
+                "%Y년 %m월 %d일"
+            )
         )
 
         if meal_data:
@@ -343,11 +515,12 @@ with tab1:
                 ""
             )
 
-            # HTML 줄바꿈 제거
-            clean_dish = (
-                raw_dish
-                .replace("<br/>", "\n")
-                .replace("<br>", "\n")
+            # <br/> → 줄바꿈
+            clean_dish = re.sub(
+                r"<br\s*/?>",
+                "\n",
+                raw_dish,
+                flags=re.IGNORECASE
             )
 
             cal_info = meal_data.get(
@@ -355,7 +528,9 @@ with tab1:
                 "정보 없음"
             )
 
-            col1, col2 = st.columns([2, 1])
+            col1, col2 = st.columns(
+                [2, 1]
+            )
 
             with col1:
 
@@ -363,7 +538,9 @@ with tab1:
                     "**📋 메뉴 및 알레르기 정보**"
                 )
 
-                st.text(clean_dish)
+                st.text(
+                    clean_dish
+                )
 
             with col2:
 
@@ -371,294 +548,382 @@ with tab1:
                     "**🔥 칼로리**"
                 )
 
-                st.info(cal_info)
+                st.info(
+                    cal_info
+                )
 
         else:
 
             st.info(
-                "ℹ️ 선택하신 날짜에 제공되는 "
+                "ℹ️ 선택하신 날짜에 "
                 "중식 급식 정보가 없습니다."
             )
 
-    elif not selected_school and search_input.strip():
-
-        st.info(
-            "👆 상단 목록에서 학교를 선택해 주세요."
-        )
-
     else:
 
-        st.info(
-            "👆 학교 이름을 입력하고 "
-            "선택한 후 급식을 확인하세요."
-        )
+        if search_input.strip():
+
+            st.info(
+                "👆 검색 결과에서 학교를 "
+                "선택해 주세요."
+            )
+
+        else:
+
+            st.info(
+                "👆 학교 이름을 입력하고 "
+                "학교를 선택해 주세요."
+            )
 
 
-# ==========================================
+# =========================================================
 # TAB 2
-# 평택시 고등학교 전체 칼로리 비교
-# ==========================================
+# =========================================================
 
 with tab2:
 
     st.subheader(
-        "📅 날짜 선택 및 평택시 고등학교 칼로리 비교"
+        "📊 평택시 고등학교 전체 칼로리 비교"
     )
 
-    today_kst = datetime.datetime.now(
-        ZoneInfo("Asia/Seoul")
-    ).date()
+    # -----------------------------------------------------
+    # 날짜
+    # -----------------------------------------------------
 
     selected_date_tab2 = st.date_input(
-        "조회할 날짜를 선택하세요:",
+        "조회할 날짜를 선택하세요",
         value=today_kst,
         key="tab2_date"
     )
 
     st.divider()
 
-    # ======================================
-    # 날짜가 선택된 경우
-    # ======================================
+    # -----------------------------------------------------
+    # 학교 목록 가져오기
+    # -----------------------------------------------------
 
-    if selected_date_tab2:
+    with st.spinner(
+        "평택시 고등학교 목록을 불러오는 중..."
+    ):
+
+        pyeongtaek_schools = (
+            get_pyeongtaek_high_schools()
+        )
+
+    # 디버깅 정보
+    st.caption(
+        f"평택시 고등학교 검색 결과: "
+        f"{len(pyeongtaek_schools)}개"
+    )
+
+    # -----------------------------------------------------
+    # 학교가 정상적으로 조회된 경우
+    # -----------------------------------------------------
+
+    if pyeongtaek_schools:
+
+        st.success(
+            f"총 **{len(pyeongtaek_schools)}개**의 "
+            f"평택시 고등학교를 확인했습니다."
+        )
 
         ymd_tab2 = selected_date_tab2.strftime(
             "%Y%m%d"
         )
 
-        # ==================================
-        # 평택시 고등학교 목록 가져오기
-        # ==================================
+        meal_records = []
 
-        with st.spinner(
-            "평택시 고등학교 목록을 불러오는 중..."
+        # -------------------------------------------------
+        # 진행률
+        # -------------------------------------------------
+
+        progress = st.progress(0)
+
+        status = st.empty()
+
+        total = len(
+            pyeongtaek_schools
+        )
+
+        # -------------------------------------------------
+        # 학교별 급식 조회
+        # -------------------------------------------------
+
+        for index, school in enumerate(
+            pyeongtaek_schools
         ):
 
-            pyeongtaek_schools = (
-                fetch_pyeongtaek_high_schools()
+            school_name = school.get(
+                "SCHUL_NM",
+                "학교명 없음"
             )
 
-        # ==================================
-        # 학교 목록 확인
-        # ==================================
-
-        if pyeongtaek_schools:
-
-            st.success(
-                f"총 **{len(pyeongtaek_schools)}개**의 "
-                f"평택시 소재 고등학교를 확인했습니다."
+            status.write(
+                f"🍱 {index + 1}/{total} "
+                f"→ {school_name}"
             )
 
-            # ==================================
-            # 급식 데이터 조회
-            # ==================================
-
-            meal_records = []
-
-            progress_bar = st.progress(0)
-
-            status_text = st.empty()
-
-            total_schools = len(
-                pyeongtaek_schools
+            meal = fetch_meal_info(
+                school[
+                    "ATPT_OFCDC_SC_CODE"
+                ],
+                school[
+                    "SD_SCHUL_CODE"
+                ],
+                ymd_tab2
             )
 
-            for index, sch in enumerate(
-                pyeongtaek_schools
-            ):
+            if meal:
 
-                school_name = sch.get(
-                    "SCHUL_NM",
-                    "학교명 없음"
+                cal_info = meal.get(
+                    "CAL_INFO",
+                    ""
                 )
 
-                status_text.text(
-                    f"급식 조회 중... "
-                    f"{index + 1}/{total_schools} "
-                    f"→ {school_name}"
+                calories = extract_calories(
+                    cal_info
                 )
 
-                m = fetch_meal_info(
-                    sch["ATPT_OFCDC_SC_CODE"],
-                    sch["SD_SCHUL_CODE"],
-                    ymd_tab2
-                )
+                if calories > 0:
 
-                if m:
-
-                    cal_info = m.get(
-                        "CAL_INFO",
-                        ""
+                    meal_records.append(
+                        {
+                            "학교명": school_name,
+                            "상세 칼로리": cal_info,
+                            "칼로리(kcal)": calories
+                        }
                     )
 
-                    cal_val = extract_calories(
-                        cal_info
-                    )
+            progress.progress(
+                (index + 1) / total
+            )
 
-                    if cal_val > 0:
+        status.empty()
+        progress.empty()
 
-                        meal_records.append(
-                            {
-                                "학교명": school_name,
-                                "칼로리(kcal)": cal_val,
-                                "상세 칼로리": cal_info,
-                            }
-                        )
+        # -------------------------------------------------
+        # 결과
+        # -------------------------------------------------
 
-                progress_bar.progress(
-                    (index + 1) / total_schools
+        if meal_records:
+
+            df = pd.DataFrame(
+                meal_records
+            )
+
+            # 칼로리 높은 순
+            df = df.sort_values(
+                "칼로리(kcal)",
+                ascending=False
+            ).reset_index(
+                drop=True
+            )
+
+            st.markdown(
+                f"### 📊 평택시 고등학교 "
+                f"급식 칼로리 비교"
+            )
+
+            st.caption(
+                selected_date_tab2.strftime(
+                    "%Y년 %m월 %d일"
+                )
+            )
+
+            # -------------------------------------------------
+            # 평균 / 최고 / 최저
+            # -------------------------------------------------
+
+            average_calorie = round(
+                df["칼로리(kcal)"].mean(),
+                1
+            )
+
+            max_row = df.iloc[0]
+
+            min_row = df.iloc[-1]
+
+            col1, col2, col3 = st.columns(
+                3
+            )
+
+            with col1:
+
+                st.metric(
+                    "🔥 평균 칼로리",
+                    f"{average_calorie} kcal"
                 )
 
-            status_text.empty()
-            progress_bar.empty()
+            with col2:
 
-            # ==================================
-            # 결과가 있는 경우
-            # ==================================
-
-            if meal_records:
-
-                df = pd.DataFrame(
-                    meal_records
+                st.metric(
+                    "📈 최고 칼로리",
+                    f"{max_row['칼로리(kcal)']} kcal",
+                    max_row["학교명"]
                 )
 
-                # 칼로리 높은 순
-                df_sorted = df.sort_values(
-                    by="칼로리(kcal)",
-                    ascending=False
-                ).reset_index(drop=True)
+            with col3:
 
-                st.markdown(
-                    f"### 📊 **평택시 고등학교 "
-                    f"급식 칼로리 비교** "
-                    f"({selected_date_tab2.strftime('%Y-%m-%d')})"
+                st.metric(
+                    "📉 최저 칼로리",
+                    f"{min_row['칼로리(kcal)']} kcal",
+                    min_row["학교명"]
                 )
 
-                # ==================================
-                # 통계
-                # ==================================
+            st.divider()
 
-                avg_cal = round(
-                    df_sorted["칼로리(kcal)"].mean(),
-                    1
-                )
+            # -------------------------------------------------
+            # 그래프
+            # -------------------------------------------------
 
-                max_row = df_sorted.iloc[0]
+            st.markdown(
+                "#### 📊 학교별 칼로리 비교"
+            )
 
-                min_row = df_sorted.iloc[-1]
+            chart_df = df[
+                ["학교명", "칼로리(kcal)"]
+            ].set_index(
+                "학교명"
+            )
 
-                col1, col2, col3 = st.columns(3)
+            st.bar_chart(
+                chart_df,
+                height=600
+            )
 
-                with col1:
+            st.divider()
 
-                    st.metric(
-                        "🔥 평택시 평균 칼로리",
-                        f"{avg_cal} kcal"
-                    )
+            # -------------------------------------------------
+            # 표
+            # -------------------------------------------------
 
-                with col2:
+            st.markdown(
+                "#### 📋 상세 데이터"
+            )
 
-                    st.metric(
-                        "📈 최고 칼로리",
-                        f"{max_row['칼로리(kcal)']} kcal",
-                        max_row["학교명"]
-                    )
-
-                with col3:
-
-                    st.metric(
-                        "📉 최저 칼로리",
-                        f"{min_row['칼로리(kcal)']} kcal",
-                        min_row["학교명"]
-                    )
-
-                st.divider()
-
-                # ==================================
-                # 막대 그래프
-                # ==================================
-
-                st.markdown(
-                    "#### 📊 학교별 칼로리 비교"
-                )
-
-                chart_df = (
-                    df_sorted
-                    .set_index("학교명")
-                    [["칼로리(kcal)"]]
-                )
-
-                st.bar_chart(
-                    chart_df,
-                    height=500
-                )
-
-                # ==================================
-                # 상세 데이터
-                # ==================================
-
-                st.markdown(
-                    "#### 📋 상세 데이터 표"
-                )
-
-                display_df = df_sorted[
+            st.dataframe(
+                df[
                     [
                         "학교명",
                         "상세 칼로리",
                         "칼로리(kcal)"
                     ]
+                ],
+                use_container_width=True,
+                hide_index=True
+            )
+
+            # -------------------------------------------------
+            # CSV 다운로드
+            # -------------------------------------------------
+
+            csv = df[
+                [
+                    "학교명",
+                    "상세 칼로리",
+                    "칼로리(kcal)"
                 ]
+            ].to_csv(
+                index=False
+            ).encode(
+                "utf-8-sig"
+            )
 
-                st.dataframe(
-                    display_df,
-                    use_container_width=True,
-                    hide_index=True
-                )
-
-                # ==================================
-                # CSV 다운로드
-                # ==================================
-
-                csv_data = display_df.to_csv(
-                    index=False
-                ).encode("utf-8-sig")
-
-                st.download_button(
-                    label="📥 CSV 파일 다운로드",
-                    data=csv_data,
-                    file_name=(
-                        f"평택시_고등학교_급식칼로리_"
-                        f"{ymd_tab2}.csv"
-                    ),
-                    mime="text/csv"
-                )
-
-            # ==================================
-            # 급식 데이터가 없는 경우
-            # ==================================
-
-            else:
-
-                st.warning(
-                    f"ℹ️ 선택하신 날짜 "
-                    f"({selected_date_tab2.strftime('%Y년 %m월 %d일')})에는 "
-                    f"급식 정보가 등록된 "
-                    f"평택시 고등학교가 없습니다."
-                )
-
-        # ==================================
-        # 학교 목록 API 실패
-        # ==================================
+            st.download_button(
+                label="📥 CSV 다운로드",
+                data=csv,
+                file_name=(
+                    "평택시_고등학교_급식칼로리_"
+                    f"{ymd_tab2}.csv"
+                ),
+                mime="text/csv"
+            )
 
         else:
 
-            st.error(
-                "❌ 평택시 고등학교 목록을 "
-                "불러오지 못했습니다."
+            st.warning(
+                "ℹ️ 선택한 날짜에 급식 정보가 "
+                "등록된 평택시 고등학교가 없습니다."
             )
 
-            st.info(
-                "NEIS API 연결 상태 또는 "
-                "검색 조건을 확인해주세요."
+    # -----------------------------------------------------
+    # 학교 목록을 못 가져온 경우
+    # -----------------------------------------------------
+
+    else:
+
+        st.error(
+            "❌ 평택시 고등학교 목록을 "
+            "불러오지 못했습니다."
+        )
+
+        st.info(
+            "아래 디버깅 정보를 확인해 주세요."
+        )
+
+        # -------------------------------------------------
+        # 직접 API 테스트
+        # -------------------------------------------------
+
+        with st.expander(
+            "🔧 NEIS API 연결 테스트"
+        ):
+
+            test_url = (
+                f"{NEIS_BASE_URL}/schoolInfo"
             )
+
+            test_params = {
+                "Type": "json",
+                "pIndex": 1,
+                "pSize": 10,
+                "ATPT_OFCDC_SC_CODE": "J10",
+                "SCHUL_KND_SC_NM": "고등학교",
+            }
+
+            st.write(
+                "**요청 주소**"
+            )
+
+            st.code(
+                test_url
+            )
+
+            try:
+
+                test_response = requests.get(
+                    test_url,
+                    params=test_params,
+                    timeout=15
+                )
+
+                st.write(
+                    "**HTTP 상태 코드:**",
+                    test_response.status_code
+                )
+
+                st.write(
+                    "**실제 요청 URL:**"
+                )
+
+                st.code(
+                    test_response.url
+                )
+
+                test_data = (
+                    test_response.json()
+                )
+
+                st.write(
+                    "**API 응답:**"
+                )
+
+                st.json(
+                    test_data
+                )
+
+            except Exception as e:
+
+                st.error(
+                    f"API 테스트 실패: {e}"
+                )
