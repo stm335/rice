@@ -10,8 +10,8 @@ st.set_page_config(page_title="학교 급식 찾아보기", page_icon="🍱", la
 
 st.title("🍱 학교 급식 찾아보기")
 
-# 2개의 탭 구성
-tab1, tab2 = st.tabs(["📋 오늘의 급식 메뉴", "📊 식재료 원산지 비율"])
+# 2개 탭 구성
+tab1, tab2 = st.tabs(["📋 오늘의 급식 메뉴", "📊 평택시 학교별 급식 칼로리 비교"])
 
 # 축약어 대체 사전 및 정규화 함수
 ABBR_MAP = {
@@ -38,10 +38,13 @@ def expand_school_name(name: str) -> str:
 
 # NEIS API 요청 함수
 @st.cache_data(ttl=3600)
-def fetch_school_info(school_name: str):
+def fetch_school_info(school_name: str, location: str = None):
     """NEIS 학교기본정보 API를 호출하여 학교 목록을 검색합니다."""
     url = "https://open.neis.go.kr/hub/schoolInfo"
     params = {"Type": "json", "pIndex": 1, "pSize": 100, "SCHUL_NM": school_name}
+    if location:
+        params["LCTN_SC_NM"] = location  # 예: 경기도평택시
+
     try:
         res = requests.get(url, params=params, timeout=5)
         data = res.json()
@@ -83,99 +86,58 @@ def fetch_meal_info(atpt_code: str, sd_code: str, ymd_str: str):
     return None
 
 
-def parse_origin_info(meal_data: dict):
-    """
-    NEIS ORGN_INFO 및 메뉴명(DDISH_NM) 텍스트를 정밀 분석하여
-    식재료별 원산지와 국산/수입산 비율을 계산합니다.
-    """
-    if not meal_data:
-        return [], {"국산": 0, "수입산": 0, "기타/혼합": 0}, {}
-
-    orgn_str = meal_data.get("ORGN_INFO", "")
-    dish_str = meal_data.get("DDISH_NM", "")
-
-    raw_items = []
-
-    # 1. ORGN_INFO 필드가 등록되어 있는 경우
-    if orgn_str:
-        cleaned_orgn = orgn_str.replace("<br/>", "\n").replace("<br>", "\n")
-        lines = [line.strip() for line in cleaned_orgn.split("\n") if line.strip()]
-        raw_items.extend(lines)
-
-    # 2. ORGN_INFO가 빈 경우 DDISH_NM(메뉴명) 내 괄호 등에서 원산지 정보 추출 시도
-    if not raw_items and dish_str:
-        matches = re.findall(r"[\(\[\{](.*?)[\)\]\}]", dish_str)
-        for m in matches:
-            if any(
-                k in m
-                for k in [
-                    "국산",
-                    "국내산",
-                    "수입산",
-                    "호주",
-                    "미국",
-                    "중국",
-                    "칠레",
-                    "스페인",
-                ]
-            ):
-                raw_items.append(m)
-
-    if not raw_items:
-        return [], {"국산": 0, "수입산": 0, "기타/혼합": 0}, {}
-
-    parsed_list = []
-    counts = {"국산": 0, "수입산": 0, "기타/혼합": 0}
-
-    for item in raw_items:
-        # 다양한 구분자 기호 분리 (:, -, / 등)
-        parts = re.split(r"[:\-\/]", item, maxsplit=1)
-        if len(parts) == 2:
-            ingredient, origin = parts[0].strip(), parts[1].strip()
-        else:
-            ingredient = "식재료"
-            origin = item.strip()
-
-        # 국산 / 수입산 / 기타 판별
-        if any(kw in origin for kw in ["국내산", "국산", "한우"]):
-            category = "국산"
-        elif any(
-            kw in origin
-            for kw in [
-                "수입산",
-                "호주",
-                "미국",
-                "중국",
-                "브라질",
-                "칠레",
-                "스페인",
-                "베트남",
-                "원양산",
-                "러시아",
-            ]
-        ):
-            category = "수입산"
-        else:
-            category = "기타/혼합"
-
-        counts[category] += 1
-        parsed_list.append({"식재료": ingredient, "원산지": origin, "구분": category})
-
-    total = sum(counts.values())
-    ratios = {
-        k: round((v / total) * 100, 1) if total > 0 else 0 for k, v in counts.items()
+@st.cache_data(ttl=3600)
+def fetch_pyeongtaek_schools(school_type_keyword: str):
+    """평택 소재 학교 목록 중 선택된 학교급(고/중/초)에 맞게 검색합니다."""
+    # 경기도교육청(J10) 관할 평택 소재 학교 검색
+    url = "https://open.neis.go.kr/hub/schoolInfo"
+    params = {
+        "Type": "json",
+        "pIndex": 1,
+        "pSize": 100,
+        "ATPT_OFCDC_SC_CODE": "J10",
+        "SCHUL_NM": school_type_keyword,
     }
+    try:
+        res = requests.get(url, params=params, timeout=5)
+        data = res.json()
+        if "schoolInfo" in data:
+            rows = data["schoolInfo"][1]["row"]
+            # 도로명 주소 또는 소재지명에 '평택'이 포함된 학교만 필터링
+            pyeongtaek_rows = [
+                r
+                for r in rows
+                if "평택" in r.get("ORG_RDNMA", "")
+                or "평택" in r.get("LCTN_SC_NM", "")
+            ]
+            return pyeongtaek_rows
+    except Exception:
+        pass
+    return []
 
-    return parsed_list, counts, ratios
+
+def extract_calories(cal_str: str) -> float:
+    """'654.3 Kcal' 형태의 문자열에서 숫자(float)만 추출합니다."""
+    if not cal_str:
+        return 0.0
+    match = re.search(r"([\d\.]+)", cal_str)
+    if match:
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return 0.0
+    return 0.0
 
 
-# 공통 검색/날짜 입력 UI
-def render_search_form(key_prefix: str):
+# ==========================================
+# TAB 1: 오늘의 급식 메뉴
+# ==========================================
+with tab1:
     st.subheader("1. 학교 검색")
     search_input = st.text_input(
         "학교 이름을 입력하세요",
         placeholder="예: 수도여고, 서울고, 환일중",
-        key=f"{key_prefix}_search",
+        key="tab1_search",
     )
 
     selected_school = None
@@ -189,7 +151,7 @@ def render_search_form(key_prefix: str):
             selected_label = st.selectbox(
                 "검색된 학교 목록에서 선택하세요:",
                 list(options.keys()),
-                key=f"{key_prefix}_select",
+                key="tab1_select",
             )
             selected_school = options[selected_label]
         else:
@@ -199,30 +161,21 @@ def render_search_form(key_prefix: str):
 
     st.divider()
     st.subheader("2. 날짜 선택")
-    
-    # 한국 시간(KST) 기준 오늘 날짜 가져오기
     today_kst = datetime.datetime.now(ZoneInfo("Asia/Seoul")).date()
     selected_date = st.date_input(
-        "날짜를 선택하세요", value=today_kst, key=f"{key_prefix}_date"
+        "날짜를 선택하세요", value=today_kst, key="tab1_date"
     )
 
-    return selected_school, selected_date
-
-
-# ==========================================
-# TAB 1: 오늘의 급식 메뉴
-# ==========================================
-with tab1:
-    school, date_val = render_search_form("tab1")
-
-    if school and date_val:
-        ymd = date_val.strftime("%Y%m%d")
+    if selected_school and selected_date:
+        ymd = selected_date.strftime("%Y%m%d")
         meal_data = fetch_meal_info(
-            school["ATPT_OFCDC_SC_CODE"], school["SD_SCHUL_CODE"], ymd
+            selected_school["ATPT_OFCDC_SC_CODE"],
+            selected_school["SD_SCHUL_CODE"],
+            ymd,
         )
 
-        st.markdown(f"### 🍱 **{school['SCHUL_NM']}** 급식 정보")
-        st.caption(f"일자: {date_val.strftime('%Y년 %m월 %d일')}")
+        st.markdown(f"### 🍱 **{selected_school['SCHUL_NM']}** 급식 정보")
+        st.caption(f"일자: {selected_date.strftime('%Y년 %m월 %d일')}")
 
         if meal_data:
             raw_dish = meal_data.get("DDISH_NM", "")
@@ -238,58 +191,107 @@ with tab1:
                 st.info(cal_info)
         else:
             st.info("ℹ️ 선택하신 날짜에 제공되는 중식 급식 정보가 없습니다.")
-    elif not school and st.session_state.get("tab1_search", "").strip():
+    elif not selected_school and search_input.strip():
         st.info("👆 상단 목록에서 학교를 선택해 주세요.")
     else:
         st.info("👆 학교 이름을 입력하고 선택한 후 급식을 확인하세요.")
 
 
 # ==========================================
-# TAB 2: 식재료 원산지 비율 분석
+# TAB 2: 평택시 학교별 급식 칼로리 비교
 # ==========================================
 with tab2:
-    school, date_val = render_search_form("tab2")
+    st.subheader("1. 조건 선택")
 
-    if school and date_val:
-        ymd = date_val.strftime("%Y%m%d")
-        meal_data = fetch_meal_info(
-            school["ATPT_OFCDC_SC_CODE"], school["SD_SCHUL_CODE"], ymd
+    c1, c2 = st.columns(2)
+    with c1:
+        school_kind = st.selectbox(
+            "학교급 선택:",
+            ["고등학교", "중학교", "초등학교"],
+            key="tab2_kind",
+        )
+    with c2:
+        today_kst = datetime.datetime.now(ZoneInfo("Asia/Seoul")).date()
+        selected_date_tab2 = st.date_input(
+            "날짜 선택:", value=today_kst, key="tab2_date"
         )
 
-        st.markdown(f"### 🌾 **{school['SCHUL_NM']}** 원산지 비율 분석")
-        st.caption(f"일자: {date_val.strftime('%Y년 %m월 %d일')}")
+    st.divider()
 
-        if meal_data:
-            parsed_items, counts, ratios = parse_origin_info(meal_data)
+    if selected_date_tab2 and school_kind:
+        ymd_tab2 = selected_date_tab2.strftime("%Y%m%d")
 
-            if parsed_items:
-                # 메트릭 카드 표시
+        # 검색 키워드 설정 (고등학교 -> 고)
+        search_kw = school_kind[0] if school_kind != "초등학교" else "초"
+        pyeongtaek_schools = fetch_pyeongtaek_schools(search_kw)
+
+        if pyeongtaek_schools:
+            with st.spinner("평택시 내 학교들의 급식 칼로리 정보를 불러오는 중..."):
+                meal_records = []
+                for sch in pyeongtaek_schools:
+                    m = fetch_meal_info(
+                        sch["ATPT_OFCDC_SC_CODE"],
+                        sch["SD_SCHUL_CODE"],
+                        ymd_tab2,
+                    )
+                    if m and m.get("CAL_INFO"):
+                        cal_val = extract_calories(m.get("CAL_INFO"))
+                        if cal_val > 0:
+                            meal_records.append(
+                                {
+                                    "학교명": sch["SCHUL_NM"],
+                                    "칼로리(kcal)": cal_val,
+                                    "칼로리 정보": m.get("CAL_INFO"),
+                                }
+                            )
+
+            st.markdown(
+                f"### 📊 **평택시 {school_kind} 급식 칼로리 비교**"
+            )
+            st.caption(
+                f"조회 날짜: {selected_date_tab2.strftime('%Y년 %m월 %d일')}"
+            )
+
+            if meal_records:
+                df = pd.DataFrame(meal_records)
+
+                # 평균 칼로리 메트릭 카드
+                avg_cal = round(df["칼로리(kcal)"].mean(), 1)
+                max_row = df.loc[df["칼로리(kcal)"].idxmax()]
+                min_row = df.loc[df["칼로리(kcal)"].idxmin()]
+
                 m1, m2, m3 = st.columns(3)
-                m1.metric("🇰🇷 국산 비율", f"{ratios['국산']}%", f"{counts['국산']}개 품목")
+                m1.metric("🔥 평균 칼로리", f"{avg_cal} kcal")
                 m2.metric(
-                    "🌐 수입산 비율",
-                    f"{ratios['수입산']}%",
-                    f"{counts['수입산']}개 품목",
+                    "📈 최고 칼로리",
+                    f"{max_row['칼로리(kcal)']} kcal",
+                    max_row["학교명"],
                 )
                 m3.metric(
-                    "🔄 기타/혼합 비율",
-                    f"{ratios['기타/혼합']}%",
-                    f"{counts['기타/혼합']}개 품목",
+                    "📉 최저 칼로리",
+                    f"{min_row['칼로리(kcal)']} kcal",
+                    min_row["학교명"],
                 )
 
                 st.divider()
 
-                # 데이터프레임 표 출력
-                st.markdown("**📋 전체 식재료 원산지 상세 표**")
-                df = pd.DataFrame(parsed_items)
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                # 1. 칼로리 비교 막대 그래프
+                st.markdown("**📊 학교별 칼로리 비교 그래프**")
+                chart_df = df.set_index("학교명")[["칼로리(kcal)"]]
+                st.bar_chart(chart_df)
+
+                # 2. 칼로리 상세 데이터 표
+                st.markdown("**📋 상세 칼로리 데이터 표**")
+                st.dataframe(
+                    df[["학교명", "칼로리 정보", "칼로리(kcal)"]].sort_values(
+                        by="칼로리(kcal)", ascending=False
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
             else:
                 st.info(
-                    "ℹ️ 해당 날짜의 식단 정보는 있으나 원산지 상세 필드가 등록되어 있지 않습니다."
+                    f"ℹ️ {selected_date_tab2.strftime('%Y년 %m월 %d일')}에 급식 칼로리 정보가 등록된 평택시 {school_kind}가 없습니다. (주말/휴일 또는 미등록)"
                 )
         else:
-            st.info("ℹ️ 선택하신 날짜에 제공되는 중식 급식 정보가 없습니다.")
-    elif not school and st.session_state.get("tab2_search", "").strip():
-        st.info("👆 상단 목록에서 학교를 선택해 주세요.")
-    else:
-        st.info("👆 학교 이름을 입력하고 선택한 후 급식을 확인하세요.")
+            st.warning("평택시 학교 정보를 불러올 수 없습니다.")
