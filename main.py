@@ -21,7 +21,7 @@ def fetch_pyeongtaek_high_schools():
     params = {
         "Type": "json",
         "pIndex": 1,
-        "pSize": 100,  # 평택 내 고등학교는 20개 안팎이므로 100개로 충분합니다.
+        "pSize": 100,
         "ATPT_OFCDC_SC_CODE": "J10",  # 경기도교육청
         "LCTN_SC_NM": "경기도 평택시",  # 소재지: 경기도 평택시
         "SCHUL_KND_SC_NM": "고등학교",  # 학교급: 고등학교
@@ -152,11 +152,9 @@ if selected_date:
             )
         else:
             st.warning(
-                f"ℹ️ 선택하신 날짜({selected_date.strftime('%Y년 %m월 %d일')})에는 급식 정보가 등록된 평택시 고등학교가 없습니다. (주말, 공휴일, 방학 기간이거나 정보 미등록일 수 있습니다.)"
+                f"ℹ️ 선택하신 날짜({selected_date.strftime('%Y년 %m월 %d일')})에는 급식 정보가 등록된 평택시 고등학교가 없습니다."
             )
     else:
         st.error(
             "평택시 고등학교 목록을 불러올 수 없습니다. API 연결을 확인해주세요."
         )
-        else:
-            st.error("평택시 고등학교 목록을 불러오지 못했습니다.")
