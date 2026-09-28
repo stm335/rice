@@ -38,7 +38,11 @@ def expand_school_name(name: str) -> str:
     return expanded
 
 
-# 1. 개별 학교 검색 API
+# ----------------------------------------------------
+# NEIS API 함수 정의 (호출 코드보다 항상 위에 위치해야 함)
+# ----------------------------------------------------
+
+
 @st.cache_data(ttl=3600)
 def fetch_school_info(school_name: str):
     """NEIS 학교기본정보 API를 호출하여 학교 목록을 검색합니다."""
@@ -64,7 +68,6 @@ def search_school(keyword: str):
     return results
 
 
-# 2. 평택시 소재 고등학교 동적 조회 API
 @st.cache_data(ttl=86400)
 def fetch_pyeongtaek_high_schools():
     """경기도교육청(J10) 중 위치(LCTN_SC_NM)가 '경기도 평택시'인 고등학교만 조회합니다."""
@@ -87,7 +90,6 @@ def fetch_pyeongtaek_high_schools():
     return []
 
 
-# 3. 급식 정보 API
 @st.cache_data(ttl=3600)
 def fetch_meal_info(atpt_code: str, sd_code: str, ymd_str: str):
     """NEIS 급식식단정보 API를 호출하여 해당 날짜의 중식 정보를 가져옵니다."""
@@ -230,14 +232,12 @@ with tab2:
 
             if meal_records:
                 df = pd.DataFrame(meal_records)
-                # 칼로리 기준 내림차순 정렬
                 df_sorted = df.sort_values(by="칼로리(kcal)", ascending=False)
 
                 st.markdown(
                     f"### 📊 **평택시 고등학교 급식 칼로리 비교** ({selected_date_tab2.strftime('%Y-%m-%d')})"
                 )
 
-                # 요약 카드
                 avg_cal = round(df_sorted["칼로리(kcal)"].mean(), 1)
                 max_row = df_sorted.iloc[0]
                 min_row = df_sorted.iloc[-1]
@@ -257,13 +257,11 @@ with tab2:
 
                 st.divider()
 
-                # 📊 막대 그래프
                 st.markdown("#### 📊 학교별 칼로리 비교 (막대 그래프)")
                 st.bar_chart(
                     df_sorted.set_index("학교명")[["칼로리(kcal)"]], height=450
                 )
 
-                # 📋 데이터표
                 st.markdown("#### 📋 상세 데이터 표")
                 st.dataframe(
                     df_sorted[["학교명", "상세 칼로리", "칼로리(kcal)"]],
